@@ -1,0 +1,12 @@
+#!/bin/bash
+CONTAINER_NAME=refinery-websocket
+
+echo -ne 'starting...'
+docker run -it --rm \
+-w /app \
+--name refinery-websocket \
+--mount type=bind,source="$(pwd)"/,target=/app \
+--network dev-setup_default \
+-e DB_DSN="host=dev-setup_graphql-postgres_1 port=5432 user=postgres password=onetask sslmode=disable" \
+cosmtrek/air
+echo -ne '\t\t\t [done]\n'
