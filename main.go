@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"database/sql"
 
 	_ "github.com/lib/pq"
@@ -15,6 +16,20 @@ var addr = flag.String("addr", ":8080", "http service address")
 var (
 	Logger *log.Logger
 )
+
+func getDbConnString() string {
+	dsn := os.Getenv("DB_DSN")
+	dsnAtSplit := strings.Split(dsn, "@")
+	dsnUserPassSplit := strings.Split(strings.Replace(dsnAtSplit[0], "postgresql://", "", 1), ":")
+	dsnHostPortSplit := strings.Split(dsnAtSplit[1], "/")
+	dsnHostSplit := strings.Split(dsnHostPortSplit[0], ":")
+	dsnDbParamsSplit := strings.Split(dsnHostPortSplit[1], "?")
+	dsnParamsSplit := strings.Split(dsnDbParamsSplit[1], "&")
+	
+	return fmt.Sprintf(
+		"host=%s port=%d user=%s password=%s dbname=%s %s",
+    	dsnHostSplit[0], 5432, dsnUserPassSplit[0], dsnUserPassSplit[1], dsnDbParamsSplit[0], strings.Join(dsnParamsSplit, " "))
+}
 
 func main() {
 	Logger = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
@@ -38,7 +53,8 @@ func main() {
 }
 
 func getOrganizationId(userId string) string {
-	db, dberr := sql.Open("postgres", os.Getenv("DB_DSN"))
+	psqlInfo := getDbConnString()
+	db, err := sql.Open("postgres", psqlInfo)
 	if dberr != nil {
 		log.Fatal("Failed to open a DB connection: ", dberr)
 	}
