@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"flag"
 	"log"
 	"net/http"
@@ -54,7 +55,7 @@ func main() {
 
 func getOrganizationId(userId string) string {
 	psqlInfo := getDbConnString()
-	db, err := sql.Open("postgres", psqlInfo)
+	db, dberr := sql.Open("postgres", psqlInfo)
 	if dberr != nil {
 		log.Fatal("Failed to open a DB connection: ", dberr)
 	}
