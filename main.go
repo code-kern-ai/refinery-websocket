@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"flag"
 	"log"
 	"net/http"
@@ -14,6 +15,12 @@ var addr = flag.String("addr", ":8080", "http service address")
 
 var (
 	Logger *log.Logger
+	host string     = os.Getenv("DB_HOST")
+	port string     = os.Getenv("DB_PORT")
+	user string     = os.Getenv("DB_USER")
+	password string = os.Getenv("DB_PASSWORD")
+	dbname string   = os.Getenv("DB_NAME")
+	params string   = os.Getenv("DB_PARAMS")
 )
 
 func main() {
@@ -38,7 +45,10 @@ func main() {
 }
 
 func getOrganizationId(userId string) string {
-	db, dberr := sql.Open("postgres", os.Getenv("DB_DSN"))
+	psqlInfo := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s %s",
+    	host, port, user, password, dbname, params)
+	db, dberr := sql.Open("postgres", psqlInfo)
 	if dberr != nil {
 		log.Fatal("Failed to open a DB connection: ", dberr)
 	}
