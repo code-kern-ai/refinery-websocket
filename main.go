@@ -6,7 +6,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"database/sql"
 
 	_ "github.com/lib/pq"
@@ -16,21 +15,13 @@ var addr = flag.String("addr", ":8080", "http service address")
 
 var (
 	Logger *log.Logger
+	host string     = os.Getenv("DB_HOST")
+	port string     = os.Getenv("DB_PORT")
+	user string     = os.Getenv("DB_USER")
+	password string = os.Getenv("DB_PASSWORD")
+	dbname string   = os.Getenv("DB_NAME")
+	params string   = os.Getenv("DB_PARAMS")
 )
-
-func getDbConnString() string {
-	dsn := os.Getenv("DB_DSN")
-	dsnAtSplit := strings.Split(dsn, "@")
-	dsnUserPassSplit := strings.Split(strings.Replace(dsnAtSplit[0], "postgresql://", "", 1), ":")
-	dsnHostPortSplit := strings.Split(dsnAtSplit[1], "/")
-	dsnHostSplit := strings.Split(dsnHostPortSplit[0], ":")
-	dsnDbParamsSplit := strings.Split(dsnHostPortSplit[1], "?")
-	dsnParamsSplit := strings.Split(dsnDbParamsSplit[1], "&")
-	
-	return fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s %s",
-    	dsnHostSplit[0], 5432, dsnUserPassSplit[0], dsnUserPassSplit[1], dsnDbParamsSplit[0], strings.Join(dsnParamsSplit, " "))
-}
 
 func main() {
 	Logger = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
@@ -54,7 +45,9 @@ func main() {
 }
 
 func getOrganizationId(userId string) string {
-	psqlInfo := getDbConnString()
+	psqlInfo := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s %s",
+    	host, port, user, password, dbname, params)
 	db, dberr := sql.Open("postgres", psqlInfo)
 	if dberr != nil {
 		log.Fatal("Failed to open a DB connection: ", dberr)
