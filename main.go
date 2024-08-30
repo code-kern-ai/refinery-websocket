@@ -15,13 +15,29 @@ var addr = flag.String("addr", ":8080", "http service address")
 
 var (
 	Logger *log.Logger
-	host string     = os.Getenv("DB_HOST")
-	port string     = os.Getenv("DB_PORT")
-	user string     = os.Getenv("DB_USER")
-	password string = os.Getenv("DB_PASSWORD")
-	dbname string   = os.Getenv("DB_NAME")
-	params string   = os.Getenv("DB_PARAMS")
+	dsn string
+	dsnExists bool
 )
+
+func init() {
+	dsn, dsnExists = os.LookupEnv("DB_DSN")
+	if dsnExists {
+		log.Println("Using DB_DSN from environment")
+	} else {
+		var (
+			host string     = os.Getenv("DB_HOST")
+			port string     = os.Getenv("DB_PORT")
+			user string     = os.Getenv("DB_USER")
+			password string = os.Getenv("DB_PASSWORD")
+			dbname string   = os.Getenv("DB_NAME")
+			params string   = os.Getenv("DB_PARAMS")
+		)
+		dsn = fmt.Sprintf(
+			"host=%s port=%s user=%s password=%s dbname=%s %s",
+			host, port, user, password, dbname, params)
+		log.Println("DB_DSN not found, using DB_* environment variables")
+	}
+}
 
 func main() {
 	Logger = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
@@ -45,10 +61,7 @@ func main() {
 }
 
 func getOrganizationId(userId string) string {
-	psqlInfo := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s %s",
-    	host, port, user, password, dbname, params)
-	db, dberr := sql.Open("postgres", psqlInfo)
+	db, dberr := sql.Open("postgres", dsn)
 	if dberr != nil {
 		log.Fatal("Failed to open a DB connection: ", dberr)
 	}
