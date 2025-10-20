@@ -8,6 +8,9 @@ import (
 	"database/sql"
 
 	_ "github.com/lib/pq"
+
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var addr = flag.String("addr", ":8080", "http service address")
@@ -18,7 +21,11 @@ var (
 
 func main() {
 	Logger = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
-	Logger.Println("Starting server") 
+	Logger.Println("Starting server")
+	
+	prometheus.MustRegister(wsSuccess)
+	prometheus.MustRegister(wsFailure)
+	http.Handle("/metrics", promhttp.Handler())
 
 	flag.Parse()
 	hub := newHub()

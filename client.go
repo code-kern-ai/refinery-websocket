@@ -9,6 +9,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/golang-jwt/jwt"
+
+    "github.com/prometheus/client_golang/prometheus"
 )
 
 const (
@@ -34,6 +36,17 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 }
+
+var (
+    wsSuccess = prometheus.NewCounter(prometheus.CounterOpts{
+        Name: "websocket_success_total",
+        Help: "Total number of successful websocket connections",
+    })
+    wsFailure = prometheus.NewCounter(prometheus.CounterOpts{
+        Name: "websocket_failure_total",
+        Help: "Total number of failed websocket connections",
+    })
+)
 
 // Client is a middleman between the websocket connection and the hub.
 type Client struct {
@@ -114,9 +127,12 @@ func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		wsFailure.Inc()
 		log.Println(err)
 		return
 	}
+	wsSuccess.Inc()
+
 	client := &Client{hub: hub, conn: conn, send: make(chan []byte, 256), organization: org}
 	client.hub.register <- client
 

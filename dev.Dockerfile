@@ -1,10 +1,15 @@
-FROM golang:1.16
+FROM golang:1.16-alpine
 
-VOLUME ["/app"]
 WORKDIR /app
 
-RUN cd /app && go mod download
+COPY go.mod ./
+COPY go.sum ./
+RUN go mod download
+
+COPY *.go ./
+
+RUN go build -o /refinery-websocket
 
 EXPOSE 8080
 
-CMD air
+CMD [ "/refinery-websocket" ]
