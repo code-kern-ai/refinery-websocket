@@ -1,0 +1,288 @@
+---
+description: WebSocket implementation patterns and best practices
+globs: **/*.go
+alwaysApply: false
+---
+
+# WebSocket Patterns
+
+## Connection Management
+
+### Upgrader Configuration
+
+- Configure `ReadBufferSize` and `WriteBufferSize` appropriately (1024 bytes is reasonable default)
+- **Always implement `CheckOrigin`** in production to prevent cross-origin attacks
+- Set reasonable buffer sizes based on expected message sizes
+
+```go
+// ✅ GOOD (with security)
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		// Implement proper origin checking
+		origin := r.Header.Get("Origin")
+		return isValidOrigin(origin)
+	},
+}
+
+// ⚠️ CURRENT (needs CheckOrigin for production)
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+}
+```
+
+### Connection Lifecycle
+
+- Upgrade HTTP connection to WebSocket
+- Register client with hub immediately after upgrade
+- Start read/write pumps in separate goroutines
+- Handle connection errors gracefully
+
+```go
+// ✅ GOOD
+conn, err := upgrader.Upgrade(w, r, nil)
+if err != nil {
+	Logger.Printf("Failed to upgrade connection: %v", err)
+	return
+}
+
+client := &Client{
+	hub: hub,
+	conn: conn,
+	send: make(chan []byte, 256),
+	organization: org,
+}
+client.hub.register <- client
+
+go client.writePump()
+go client.readPump() // If reading from client
+```
+
+## Read/Write Pumps
+
+### Write Pump Pattern
+
+- Use a separate goroutine for writing (`writePump`)
+- Implement ping/pong for connection health
+- Handle channel closure gracefully
+- Batch multiple messages when possible
+
+```go
+// ✅ GOOD
+func (c *Client) writePump() {
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		c.conn.Close()
+	}()
+	
+	for {
+		select {
+		case message, ok := <-c.send:
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if !ok {
+				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			
+			w, err := c.conn.NextWriter(websocket.TextMessage)
+			if err != nil {
+				return
+			}
+			w.Write(message)
+			
+			// Batch queued messages
+			n := len(c.send)
+			for i := 0; i < n; i++ {
+				w.Write(newline)
+				w.Write(<-c.send)
+			}
+			
+			if err := w.Close(); err != nil {
+				return
+			}
+		case <-ticker.C:
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
+		}
+	}
+}
+```
+
+### Read Pump Pattern (if needed)
+
+- Implement read pump if clients send messages
+- Set read deadlines for pong messages
+- Handle different message types appropriately
+
+```go
+// ✅ GOOD (if reading from clients)
+func (c *Client) readPump() {
+	defer func() {
+		c.hub.unregister <- c
+		c.conn.Close()
+	}()
+	
+	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetReadLimit(maxMessageSize)
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+	
+	for {
+		_, message, err := c.conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				Logger.Printf("WebSocket error: %v", err)
+			}
+			break
+		}
+		// Process message
+	}
+}
+```
+
+## Timing Constants
+
+- Define timing constants at package level
+- Use appropriate timeouts for production
+- Ensure ping period is less than pong wait
+
+```go
+const (
+	writeWait = 10 * time.Second
+	pongWait = 60 * time.Second
+	pingPeriod = (pongWait * 9) / 10  // 90% of pongWait
+	maxMessageSize = 512 * 1024       // Consider increasing for larger messages
+)
+```
+
+## Message Format
+
+- Use structured formats (JSON) for external APIs
+- Use efficient formats for internal hub communication
+- Document message formats clearly
+
+```go
+// ✅ GOOD (external API)
+type Event struct {
+	Organization string `json:"organization"`
+	Message      string `json:"message"`
+}
+
+// ✅ GOOD (internal hub format - efficient)
+hub.broadcast <- []byte(event.Organization + ";" + event.Message)
+```
+
+## Hub Pattern
+
+### Client Registration
+
+- Register clients immediately after connection upgrade
+- Store organization identifier with client
+- Use channels for thread-safe registration/unregistration
+
+```go
+// ✅ GOOD
+type Hub struct {
+	clients    map[*Client]bool
+	broadcast  chan []byte
+	register   chan *Client
+	unregister chan *Client
+}
+
+func (h *Hub) run() {
+	for {
+		select {
+		case client := <-h.register:
+			h.clients[client] = true
+		case client := <-h.unregister:
+			if _, ok := h.clients[client]; ok {
+				delete(h.clients, client)
+				close(client.send)
+			}
+		case message := <-h.broadcast:
+			// Broadcast logic
+		}
+	}
+}
+```
+
+### Message Broadcasting
+
+- Filter clients by organization before sending
+- Handle full send channels gracefully (non-blocking)
+- Close and remove clients that can't receive messages
+
+```go
+// ✅ GOOD
+case message := <-h.broadcast:
+	event := string(message)
+	arr := strings.SplitN(event, ";", 2)
+	organization := arr[0]
+	msg := arr[1]
+	
+	for client := range h.clients {
+		if client.organization == organization {
+			select {
+			case client.send <- []byte(msg):
+			default:
+				close(client.send)
+				delete(h.clients, client)
+			}
+		}
+	}
+```
+
+## Channel Management
+
+- Use buffered channels for client send channels (256 is reasonable)
+- Close channels properly to signal completion
+- Check channel closure with `ok` when receiving
+
+```go
+// ✅ GOOD
+client := &Client{
+	send: make(chan []byte, 256), // Buffered channel
+}
+
+// ✅ GOOD
+case message, ok := <-c.send:
+	if !ok {
+		// Channel closed
+		return
+	}
+```
+
+## Authentication
+
+- Extract JWT from Authorization header
+- Validate token before upgrading connection
+- Extract organization from token claims
+- Return 401 Unauthorized if authentication fails
+
+```go
+// ✅ GOOD
+func serveWs(hub *Hub, w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	
+	tokenStr := authHeader[7:] // Remove "Bearer " prefix
+	org, err := extractOrg(tokenStr)
+	if err != nil {
+		Logger.Printf("Failed to extract organization: %v", err)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	
+	// Continue with upgrade...
+}
+```

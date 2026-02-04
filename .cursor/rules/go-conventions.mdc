@@ -1,0 +1,147 @@
+---
+description: Go language conventions and style guidelines
+globs: **/*.go
+alwaysApply: false
+---
+
+# Go Conventions
+
+## Code Style
+
+- Always run `gofmt` before committing - all code must follow `gofmt` conventions
+- Use `gofumpt` for stricter formatting if available
+- Follow [Effective Go](https://go.dev/doc/effective_go) and [Go Code Review Comments](https://go.dev/s/comments)
+
+## Naming Conventions
+
+- Use camelCase for unexported functions and variables
+- Use PascalCase for exported functions, types, and constants
+- Keep names short and descriptive
+- Use initialisms consistently (e.g., `ID`, `URL`, `JWT`, `DB`)
+
+```go
+// ✅ GOOD
+func getOrganizationId(userId string) string
+type Client struct { ... }
+const writeWait = 10 * time.Second
+
+// ❌ BAD
+func Get_Organization_ID(user_id string) string
+type client struct { ... }
+const WRITE_WAIT = 10 * time.Second
+```
+
+## Package Organization
+
+- Keep package name as `main` for this application
+- Group imports: standard library, third-party, local
+- Use blank imports (`_`) for side-effect imports (e.g., database drivers)
+
+```go
+import (
+	// Standard library
+	"fmt"
+	"log"
+	"net/http"
+	
+	// Third-party
+	"github.com/gorilla/websocket"
+	"github.com/golang-jwt/jwt"
+	
+	// Side-effect imports
+	_ "github.com/lib/pq"
+)
+```
+
+## Variable Declarations
+
+- Prefer short variable declarations (`:=`) when possible
+- Use explicit types when clarity is needed
+- Group related variables together
+
+```go
+// ✅ GOOD
+var (
+	Logger *log.Logger
+	dsn string
+	dsnExists bool
+)
+
+// ✅ GOOD
+conn, err := upgrader.Upgrade(w, r, nil)
+
+// ❌ BAD
+var conn *websocket.Conn
+var err error
+conn, err = upgrader.Upgrade(w, r, nil)
+```
+
+## Function Signatures
+
+- Keep functions focused and single-purpose
+- Return errors as the last return value
+- Use named return values sparingly (only when it improves clarity)
+
+```go
+// ✅ GOOD
+func getOrganizationId(userId string) (string, error)
+
+// ❌ BAD
+func getOrganizationId(userId string) (organizationId string, err error)
+```
+
+## Comments
+
+- Write documentation comments for exported functions and types
+- Start comments with the name of the thing being described
+- Use full sentences ending with periods
+
+```go
+// ✅ GOOD
+// Client is a middleman between the websocket connection and the hub.
+type Client struct { ... }
+
+// writePump pumps messages from the hub to the websocket connection.
+func (c *Client) writePump() { ... }
+```
+
+## Constants
+
+- Define constants at package level for configuration values
+- Group related constants together
+- Use descriptive names
+
+```go
+const (
+	writeWait = 10 * time.Second
+	pongWait = 60 * time.Second
+	pingPeriod = (pongWait * 9) / 10
+	maxMessageSize = 512
+)
+```
+
+## Structs
+
+- Place struct fields logically (group related fields)
+- Add comments for fields that need explanation
+- Use field tags for JSON/other serialization when needed
+
+```go
+type Client struct {
+	hub *Hub
+	conn *websocket.Conn
+	send chan []byte
+	organization string
+}
+```
+
+## Context Usage
+
+- Accept `context.Context` as the first parameter when functions need cancellation/timeouts
+- Pass context explicitly through call chains
+- Use context for request-scoped values
+
+```go
+// ✅ GOOD (when context is needed)
+func getOrganizationId(ctx context.Context, userId string) (string, error)
+```

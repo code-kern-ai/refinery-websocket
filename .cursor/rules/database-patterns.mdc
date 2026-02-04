@@ -1,0 +1,246 @@
+---
+description: Database access patterns and best practices
+globs: **/*.go
+alwaysApply: false
+---
+
+# Database Patterns
+
+## Connection Management
+
+### Connection Opening
+
+- Open database connections when needed (or use connection pool)
+- **Always close connections** with `defer db.Close()`
+- Handle connection errors appropriately
+- Consider using a connection pool for better performance
+
+```go
+// ✅ GOOD
+func getOrganizationId(userId string) (string, error) {
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return "", fmt.Errorf("failed to open DB connection: %w", err)
+	}
+	defer db.Close()
+	
+	// Use connection
+}
+
+// ✅ BETTER (with connection pool)
+var dbPool *sql.DB
+
+func initDB() error {
+	var err error
+	dbPool, err = sql.Open("postgres", dsn)
+	if err != nil {
+		return fmt.Errorf("failed to open DB connection: %w", err)
+	}
+	
+	dbPool.SetMaxOpenConns(25)
+	dbPool.SetMaxIdleConns(5)
+	dbPool.SetConnMaxLifetime(5 * time.Minute)
+	
+	return dbPool.Ping()
+}
+
+func getOrganizationId(userId string) (string, error) {
+	var organizationId string
+	err := dbPool.QueryRow("SELECT organization_id FROM public.user WHERE id = $1", userId).Scan(&organizationId)
+	if err != nil {
+		return "", fmt.Errorf("failed to query organization: %w", err)
+	}
+	return organizationId, nil
+}
+```
+
+## Query Patterns
+
+### Parameterized Queries
+
+- **Always use parameterized queries** to prevent SQL injection
+- Use `$1`, `$2`, etc. for PostgreSQL
+- Never concatenate user input into SQL strings
+
+```go
+// ✅ GOOD
+sql := "SELECT organization_id FROM public.user WHERE id = $1"
+err := db.QueryRow(sql, userId).Scan(&organizationId)
+
+// ❌ BAD
+sql := fmt.Sprintf("SELECT organization_id FROM public.user WHERE id = '%s'", userId)
+err := db.QueryRow(sql).Scan(&organizationId)
+```
+
+### Query Execution
+
+- Use `QueryRow` for single-row queries
+- Use `Query` for multiple rows
+- Always check errors after query execution
+- Handle `sql.ErrNoRows` appropriately
+
+```go
+// ✅ GOOD
+var organizationId string
+err := db.QueryRow("SELECT organization_id FROM public.user WHERE id = $1", userId).Scan(&organizationId)
+if err != nil {
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("user %s not found", userId)
+	}
+	return "", fmt.Errorf("failed to query organization: %w", err)
+}
+return organizationId, nil
+
+// ✅ GOOD (multiple rows)
+rows, err := db.Query("SELECT id, organization_id FROM public.user WHERE organization_id = $1", orgId)
+if err != nil {
+	return nil, fmt.Errorf("failed to query users: %w", err)
+}
+defer rows.Close()
+
+var users []User
+for rows.Next() {
+	var u User
+	if err := rows.Scan(&u.ID, &u.OrganizationID); err != nil {
+		return nil, fmt.Errorf("failed to scan row: %w", err)
+	}
+	users = append(users, u)
+}
+if err := rows.Err(); err != nil {
+	return nil, fmt.Errorf("row iteration error: %w", err)
+}
+```
+
+## Error Handling
+
+### Database Errors
+
+- Distinguish between different error types
+- Handle `sql.ErrNoRows` specifically
+- Wrap errors with context
+- Log errors appropriately
+
+```go
+// ✅ GOOD
+err := db.QueryRow(sql, userId).Scan(&organizationId)
+if err != nil {
+	if err == sql.ErrNoRows {
+		Logger.Printf("User %s not found", userId)
+		return "", fmt.Errorf("user not found: %w", err)
+	}
+	Logger.Printf("Database query error: %v", err)
+	return "", fmt.Errorf("failed to query organization: %w", err)
+}
+```
+
+## Connection String
+
+### DSN Format
+
+- Support both full DSN and individual environment variables
+- Include SSL mode in production
+- Validate required connection parameters
+
+```go
+// ✅ GOOD
+func buildDSN() (string, error) {
+	if dsn, ok := os.LookupEnv("DB_DSN"); ok {
+		return dsn, nil
+	}
+	
+	var (
+		host     = os.Getenv("DB_HOST")
+		port     = os.Getenv("DB_PORT")
+		user     = os.Getenv("DB_USER")
+		password = os.Getenv("DB_PASSWORD")
+		dbname   = os.Getenv("DB_NAME")
+		params   = os.Getenv("DB_PARAMS")
+	)
+	
+	if host == "" || port == "" || user == "" || dbname == "" {
+		return "", fmt.Errorf("missing required database environment variables")
+	}
+	
+	dsn := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=require %s",
+		host, port, user, password, dbname, params)
+	
+	return dsn, nil
+}
+```
+
+## Performance Considerations
+
+### Connection Pooling
+
+- Use connection pooling for better performance
+- Set appropriate pool size limits
+- Configure connection lifetime
+- Monitor pool usage
+
+```go
+// ✅ GOOD
+dbPool.SetMaxOpenConns(25)        // Maximum open connections
+dbPool.SetMaxIdleConns(5)         // Maximum idle connections
+dbPool.SetConnMaxLifetime(5 * time.Minute) // Connection lifetime
+```
+
+### Query Optimization
+
+- Use indexes on frequently queried columns
+- Avoid N+1 queries - use JOINs or batch queries
+- Use `EXPLAIN` to analyze query plans
+- Consider caching for frequently accessed data
+
+### Prepared Statements
+
+- Use prepared statements for repeated queries
+- Improves performance and security
+- Cache prepared statements when possible
+
+```go
+// ✅ GOOD (for repeated queries)
+var getUserOrgStmt *sql.Stmt
+
+func init() {
+	var err error
+	getUserOrgStmt, err = dbPool.Prepare("SELECT organization_id FROM public.user WHERE id = $1")
+	if err != nil {
+		log.Fatal("Failed to prepare statement: ", err)
+	}
+}
+
+func getOrganizationId(userId string) (string, error) {
+	var organizationId string
+	err := getUserOrgStmt.QueryRow(userId).Scan(&organizationId)
+	if err != nil {
+		return "", fmt.Errorf("failed to query organization: %w", err)
+	}
+	return organizationId, nil
+}
+```
+
+## Transaction Management
+
+- Use transactions for multi-step operations
+- Always commit or rollback transactions
+- Handle transaction errors properly
+
+```go
+// ✅ GOOD
+tx, err := db.Begin()
+if err != nil {
+	return fmt.Errorf("failed to begin transaction: %w", err)
+}
+defer tx.Rollback() // Will be ignored if Commit succeeds
+
+// Perform operations
+if _, err := tx.Exec("UPDATE ..."); err != nil {
+	return fmt.Errorf("failed to update: %w", err)
+}
+
+if err := tx.Commit(); err != nil {
+	return fmt.Errorf("failed to commit transaction: %w", err)
+}
+return nil
+```

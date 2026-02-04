@@ -1,0 +1,64 @@
+---
+description: Core project guidelines and architecture patterns for refinery-websocket
+alwaysApply: true
+---
+
+# Refinery WebSocket Project Guidelines
+
+## Project Overview
+
+This is a WebSocket server module for refinery that enables asynchronous notifications. It uses:
+- **gorilla/websocket** for WebSocket connections
+- **PostgreSQL** for database queries
+- **JWT** for authentication
+- **Hub pattern** for managing client connections
+
+## Architecture Patterns
+
+### Hub Pattern
+- Use the Hub pattern to manage WebSocket clients
+- Hub maintains a map of active clients and channels for registration/unregistration
+- Hub broadcasts messages to clients filtered by organization
+- Each client runs in its own goroutine with separate read/write pumps
+
+### Client Management
+- Each WebSocket connection creates a `Client` struct with:
+  - Connection reference (`conn`)
+  - Send channel (`send chan []byte`)
+  - Organization identifier (`organization string`)
+- Clients register with the hub on connection
+- Clients unregister on disconnect (handled via unregister channel)
+
+### Message Broadcasting
+- Messages are broadcast to clients filtered by organization
+- Use semicolon-separated format: `organization;message` for internal message format
+- Prefer structured JSON for external APIs (Event struct)
+
+## Code Organization
+
+- `main.go`: Entry point, HTTP handlers, database queries
+- `hub.go`: Hub implementation for client management
+- `client.go`: Client struct and WebSocket handling logic
+
+## Environment Configuration
+
+- Support both `DB_DSN` (full connection string) and individual `DB_*` environment variables
+- Use `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_PARAMS` when `DB_DSN` is not set
+- Server address configurable via `-addr` flag (default: `:8080`)
+
+## Logging
+
+- Use the global `Logger` variable for application logging
+- Logger format: `"INFO: "` prefix with date, time, and file location
+- Log important events: server start, client registration/unregistration
+
+## API Endpoints
+
+- `/ws`: WebSocket endpoint for client connections (requires Authorization header)
+- `/notify`: HTTP POST endpoint for broadcasting notifications (expects JSON Event)
+
+## Dependencies
+
+- `github.com/gorilla/websocket`: WebSocket implementation
+- `github.com/golang-jwt/jwt`: JWT token parsing
+- `github.com/lib/pq`: PostgreSQL driver

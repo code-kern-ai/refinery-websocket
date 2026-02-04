@@ -1,0 +1,243 @@
+---
+description: Security best practices for WebSocket server
+alwaysApply: true
+---
+
+# Security Guidelines
+
+## Authentication & Authorization
+
+### JWT Token Validation
+
+- **Always validate JWT tokens** before processing
+- Verify token signature using proper secret/key
+- Check token expiration
+- Validate signing algorithm matches expected method
+
+```go
+// ✅ GOOD
+func extractOrg(tokenStr string) (string, error) {
+	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
+		// Validate signing method
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		
+		// Return public key for verification
+		return publicKey, nil
+	})
+	
+	if err != nil {
+		return "", fmt.Errorf("invalid token: %w", err)
+	}
+	
+	if !token.Valid {
+		return "", fmt.Errorf("token is not valid")
+	}
+	
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		return "", fmt.Errorf("invalid token claims")
+	}
+	
+	// Extract user ID safely
+	session, ok := claims["session"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid session claims")
+	}
+	
+	identity, ok := session["identity"].(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("invalid identity claims")
+	}
+	
+	userID, ok := identity["id"].(string)
+	if !ok {
+		return "", fmt.Errorf("invalid user ID")
+	}
+	
+	return getOrganizationId(userID)
+}
+```
+
+### Current Security Issues to Address
+
+- ⚠️ **JWT validation returns empty key** - Must use actual public key/secret
+- ⚠️ **No token expiration check** - Add `exp` claim validation
+- ⚠️ **No error handling in token parsing** - Handle all error cases
+- ⚠️ **Unsafe type assertions** - Use type assertions with `ok` checks
+
+## WebSocket Security
+
+### Origin Checking
+
+- **Always implement `CheckOrigin`** in production
+- Validate origin against allowed list
+- Reject connections from unauthorized origins
+
+```go
+// ✅ GOOD
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		allowedOrigins := []string{
+			"https://app.refinery.ai",
+			"https://refinery.ai",
+		}
+		for _, allowed := range allowedOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		return false
+	},
+}
+```
+
+### Connection Limits
+
+- Implement connection rate limiting
+- Limit connections per IP/organization
+- Monitor and log connection attempts
+
+### Message Size Limits
+
+- Set `maxMessageSize` to prevent DoS attacks
+- Validate message size before processing
+- Reject oversized messages
+
+```go
+const maxMessageSize = 512 * 1024 // 512KB limit
+
+c.conn.SetReadLimit(maxMessageSize)
+```
+
+## Database Security
+
+### SQL Injection Prevention
+
+- **Always use parameterized queries** - Never concatenate user input
+- Use `$1`, `$2` placeholders for PostgreSQL
+- Validate and sanitize input before queries
+
+```go
+// ✅ GOOD
+sql := "SELECT organization_id FROM public.user WHERE id = $1"
+err := db.QueryRow(sql, userId).Scan(&organizationId)
+
+// ❌ BAD
+sql := fmt.Sprintf("SELECT organization_id FROM public.user WHERE id = '%s'", userId)
+```
+
+### Connection Security
+
+- Use SSL/TLS for database connections
+- Store credentials securely (environment variables, secrets manager)
+- Never hardcode credentials in source code
+- Use connection pooling with limits
+
+```go
+// ✅ GOOD (with SSL)
+dsn := fmt.Sprintf(
+	"host=%s port=%s user=%s password=%s dbname=%s sslmode=require %s",
+	host, port, user, password, dbname, params)
+```
+
+## Input Validation
+
+### Request Validation
+
+- Validate HTTP method before processing
+- Validate request body structure
+- Check required fields
+- Sanitize string inputs
+
+```go
+// ✅ GOOD
+func notify(hub *Hub, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	var event Event
+	if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	
+	// Validate required fields
+	if event.Organization == "" {
+		http.Error(w, "Organization is required", http.StatusBadRequest)
+		return
+	}
+	
+	if event.Message == "" {
+		http.Error(w, "Message is required", http.StatusBadRequest)
+		return
+	}
+	
+	// Sanitize inputs
+	event.Organization = strings.TrimSpace(event.Organization)
+	event.Message = strings.TrimSpace(event.Message)
+	
+	hub.broadcast <- []byte(event.Organization + ";" + event.Message)
+}
+```
+
+## Error Information Disclosure
+
+- Don't expose internal error details to clients
+- Log detailed errors server-side
+- Return generic error messages to clients
+
+```go
+// ✅ GOOD
+if err != nil {
+	Logger.Printf("Database error: %v", err) // Detailed log
+	http.Error(w, "Internal server error", http.StatusInternalServerError)
+	return
+}
+
+// ❌ BAD
+if err != nil {
+	http.Error(w, err.Error(), http.StatusInternalServerError) // Exposes internals
+	return
+}
+```
+
+## Logging Security
+
+- Don't log sensitive information (passwords, tokens, PII)
+- Sanitize logs before writing
+- Use structured logging for better security analysis
+
+```go
+// ✅ GOOD
+Logger.Printf("User %s connected", userID) // Don't log full token
+
+// ❌ BAD
+Logger.Printf("Token: %s", tokenStr) // Never log tokens
+```
+
+## HTTPS/TLS
+
+- Always use HTTPS in production
+- Configure proper TLS settings
+- Use strong cipher suites
+- Implement certificate validation
+
+## Rate Limiting
+
+- Implement rate limiting for `/notify` endpoint
+- Limit WebSocket connection attempts
+- Use middleware or external service (e.g., nginx, cloudflare)
+
+## Secrets Management
+
+- Store secrets in environment variables or secrets manager
+- Never commit secrets to version control
+- Rotate secrets regularly
+- Use different secrets for different environments

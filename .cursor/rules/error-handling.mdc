@@ -1,0 +1,183 @@
+---
+description: Error handling patterns and best practices
+globs: **/*.go
+alwaysApply: false
+---
+
+# Error Handling
+
+## Core Principles
+
+- **Always check errors** - Never ignore errors with `_`
+- **Handle errors explicitly** - Use `if err != nil` pattern
+- **Add context** - Wrap errors with relevant information
+- **Log appropriately** - Log errors at the right level with context
+
+## Error Checking Pattern
+
+```go
+// ✅ GOOD
+db, err := sql.Open("postgres", dsn)
+if err != nil {
+	log.Fatal("Failed to open a DB connection: ", err)
+}
+defer db.Close()
+
+// ❌ BAD
+db, _ := sql.Open("postgres", dsn)
+defer db.Close()
+```
+
+## Error Wrapping
+
+- Use `fmt.Errorf` with `%w` verb to wrap errors with context
+- Preserve the original error for debugging
+
+```go
+// ✅ GOOD
+orgID, err := getOrganizationId(userId)
+if err != nil {
+	return "", fmt.Errorf("failed to get organization ID for user %s: %w", userId, err)
+}
+
+// ❌ BAD
+orgID, err := getOrganizationId(userId)
+if err != nil {
+	return "", fmt.Errorf("failed to get organization ID")
+}
+```
+
+## Error Logging
+
+- Use appropriate log levels (don't use `log.Fatal` unless the application cannot continue)
+- Include context in error messages
+- Log errors before returning them to callers
+
+```go
+// ✅ GOOD
+conn, err := upgrader.Upgrade(w, r, nil)
+if err != nil {
+	Logger.Printf("Failed to upgrade connection: %v", err)
+	http.Error(w, "Failed to upgrade connection", http.StatusInternalServerError)
+	return
+}
+
+// ❌ BAD
+conn, err := upgrader.Upgrade(w, r, nil)
+if err != nil {
+	return // Silent failure
+}
+```
+
+## Database Error Handling
+
+- Always check database connection errors
+- Handle query errors appropriately (not found vs. other errors)
+- Close database connections properly with `defer`
+
+```go
+// ✅ GOOD
+db, err := sql.Open("postgres", dsn)
+if err != nil {
+	Logger.Printf("Failed to open DB connection: %v", err)
+	return "", fmt.Errorf("database connection failed: %w", err)
+}
+defer db.Close()
+
+var organizationId string
+err = db.QueryRow("SELECT organization_id FROM public.user WHERE id = $1", userId).Scan(&organizationId)
+if err != nil {
+	if err == sql.ErrNoRows {
+		return "", fmt.Errorf("user %s not found", userId)
+	}
+	Logger.Printf("Query failed: %v", err)
+	return "", fmt.Errorf("failed to query organization: %w", err)
+}
+```
+
+## WebSocket Error Handling
+
+- Handle write errors gracefully
+- Close connections properly on errors
+- Don't ignore errors from `conn.WriteMessage` or `conn.NextWriter`
+
+```go
+// ✅ GOOD
+w, err := c.conn.NextWriter(websocket.TextMessage)
+if err != nil {
+	Logger.Printf("Failed to get writer: %v", err)
+	return
+}
+defer w.Close()
+
+if _, err := w.Write(message); err != nil {
+	Logger.Printf("Failed to write message: %v", err)
+	return
+}
+
+// ❌ BAD
+w, _ := c.conn.NextWriter(websocket.TextMessage)
+w.Write(message)
+```
+
+## HTTP Error Handling
+
+- Return appropriate HTTP status codes
+- Provide meaningful error messages to clients
+- Log errors server-side before responding
+
+```go
+// ✅ GOOD
+if r.Method != http.MethodPost {
+	http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	return
+}
+
+var event Event
+if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+	Logger.Printf("Failed to decode request body: %v", err)
+	http.Error(w, "Invalid request body", http.StatusBadRequest)
+	return
+}
+```
+
+## Panic Recovery
+
+- Avoid `log.Fatal` in library code - use it only in `main()`
+- Consider using `recover()` in goroutines that might panic
+- Log panics before allowing application to continue
+
+```go
+// ✅ GOOD (in main)
+err := http.ListenAndServe(*addr, nil)
+if err != nil {
+	log.Fatal("ListenAndServe: ", err)
+}
+
+// ✅ GOOD (in goroutines)
+go func() {
+	defer func() {
+		if r := recover(); r != nil {
+			Logger.Printf("Panic recovered: %v", r)
+		}
+	}()
+	// risky code here
+}()
+```
+
+## Error Return Values
+
+- Functions that can fail should return `error` as the last return value
+- Return `nil` for error when operation succeeds
+- Use descriptive error messages
+
+```go
+// ✅ GOOD
+func getOrganizationId(userId string) (string, error) {
+	if userId == "" {
+		return "", fmt.Errorf("userId cannot be empty")
+	}
+	// ... implementation
+	return organizationId, nil
+}
+```
