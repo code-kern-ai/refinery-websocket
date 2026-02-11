@@ -10,7 +10,11 @@ import (
 	_ "github.com/lib/pq"
 )
 
-var addr = flag.String("addr", ":8080", "http service address")
+var (
+	addr   = flag.String("addr", ":8080", "http service address")
+	certFile = flag.String("cert", "", "path to TLS certificate (enables HTTPS when set with -key)")
+	keyFile  = flag.String("key", "", "path to TLS private key (enables HTTPS when set with -cert)")
+)
 
 var (
 	Logger *log.Logger
@@ -30,10 +34,19 @@ func main() {
 		serveWs(hub, w, r)
 	})
 
-	log.Println("Listening on :8080")
-	err := http.ListenAndServe(*addr, nil)
-	if err != nil {
-		log.Fatal("ListenAndServe: ", err)
+	if *certFile != "" && *keyFile != "" {
+		Logger.Println("Listening with TLS on", *addr)
+		err := http.ListenAndServeTLS(*addr, *certFile, *keyFile, nil)
+		if err != nil {
+			log.Fatal("ListenAndServeTLS: ", err)
+		}
+	} else {
+		Logger.Println("Listening (no TLS) on", *addr)
+		// TLS optional for local dev; use -cert and -key in production.
+		err := http.ListenAndServe(*addr, nil) // nosemgrep: go.lang.security.audit.net.use-tls.use-tls
+		if err != nil {
+			log.Fatal("ListenAndServe: ", err)
+		}
 	}
 }
 

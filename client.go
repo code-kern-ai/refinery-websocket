@@ -1,14 +1,16 @@
 package main
 
 import (
-	"log"
-	"net/http"
-	"time"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/golang-jwt/jwt"
+	"github.com/gorilla/websocket"
 )
 
 const (
@@ -30,9 +32,25 @@ var (
 	space   = []byte{' '}
 )
 
+func allowedOrigins() []string {
+	if v := os.Getenv("REFINERY_WS_ALLOWED_ORIGINS"); v != "" {
+		return strings.Split(v, ",")
+	}
+	return []string{"https://app.refinery.ai", "https://refinery.ai"}
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		for _, allowed := range allowedOrigins() {
+			if origin == strings.TrimSpace(allowed) {
+				return true
+			}
+		}
+		return false
+	},
 }
 
 // Client is a middleman between the websocket connection and the hub.
